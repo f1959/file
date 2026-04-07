@@ -1,8 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // ====== CHANGE THESE 3 VALUES ======
-const SUPABASE_URL = 'REPLACE_WITH_YOUR_SUPABASE_URL';
-const SUPABASE_ANON_KEY = 'REPLACE_WITH_YOUR_SUPABASE_ANON_KEY';
+const SUPABASE_URL = 'https://pnyimurfileqbesoasdl.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBueWltdXJmaWxlcWJlc29hc2RsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0NDczMzAsImV4cCI6MjA5MTAyMzMzMH0.HCj5kpgu0D5b4-b02OkejdJrLdo4XX-ZrfzJ8ceW7UY';
 const SUPABASE_UPLOAD_EMAIL = 'upload-user@example.com';
 // ===================================
 
@@ -11,6 +11,13 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
 const CODE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabasePublic = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false
+  }
+});
 
 const downloadCodeInput = document.getElementById('downloadCodeInput');
 const downloadBtn = document.getElementById('downloadBtn');
@@ -196,7 +203,7 @@ async function downloadWithCode() {
   setStatus(downloadStatus, 'Checking code...');
 
   try {
-    const { data: rows, error: rowError } = await supabase
+    const { data: rows, error: rowError } = await supabasePublic
       .from('transfers')
       .select('code, object_path, original_name, content_type, created_at')
       .eq('code', code)
@@ -209,19 +216,19 @@ async function downloadWithCode() {
     const age = Date.now() - new Date(transfer.created_at).getTime();
 
     if (Number.isFinite(age) && age > CODE_TTL_MS) {
-      await supabase.storage.from(BUCKET).remove([transfer.object_path]);
-      await supabase.from('transfers').delete().eq('code', code);
+      await supabasePublic.storage.from(BUCKET).remove([transfer.object_path]);
+      await supabasePublic.from('transfers').delete().eq('code', code);
       throw new Error('Code expired.');
     }
 
-    const { data: fileData, error: downloadError } = await supabase.storage
+    const { data: fileData, error: downloadError } = await supabasePublic.storage
       .from(BUCKET)
       .download(transfer.object_path);
 
     if (downloadError) throw downloadError;
 
-    await supabase.storage.from(BUCKET).remove([transfer.object_path]);
-    await supabase.from('transfers').delete().eq('code', code);
+    await supabasePublic.storage.from(BUCKET).remove([transfer.object_path]);
+    await supabasePublic.from('transfers').delete().eq('code', code);
 
     const blob = new Blob([fileData], { type: transfer.content_type || 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
