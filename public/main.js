@@ -1,3 +1,17 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+// ====== CHANGE THESE 3 VALUES ======
+const SUPABASE_URL = 'REPLACE_WITH_YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'REPLACE_WITH_YOUR_SUPABASE_ANON_KEY';
+const UPLOAD_PASSWORD = 'change-this-upload-password';
+// ===================================
+
+const BUCKET = 'private-send-files';
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
+const CODE_TTL_MS = 24 * 60 * 60 * 1000;
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 const downloadCodeInput = document.getElementById('downloadCodeInput');
 const downloadBtn = document.getElementById('downloadBtn');
 const downloadStatus = document.getElementById('downloadStatus');
@@ -17,25 +31,40 @@ function onlyDigits(value) {
   return String(value || '').replace(/\D/g, '').slice(0, 6);
 }
 
-async function toBase64(file) {
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunkSize = 0x8000;
+function randomCode() {
+  return String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
+}
 
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+function cleanFileName(name) {
+  return String(name || 'file.bin').replace(/[^a-zA-Z0-9._\- ()]/g, '_');
+}
+
+async function createUniqueCode() {
+  for (let i = 0; i < 20; i += 1) {
+    const code = randomCode();
+    const { data, error } = await supabase
+      .from('transfers')
+      .select('code')
+      .eq('code', code)
+      .limit(1);
+
+    if (error) throw error;
+    if (!data.length) return code;
   }
-
-  return btoa(binary);
+  throw new Error('Could not generate code. Try again.');
 }
 
 async function uploadFile() {
   const file = fileInput.files && fileInput.files[0];
   const uploadPassword = uploadPasswordInput.value;
 
-  if (!uploadPassword) {
-    setStatus(uploadStatus, 'Enter upload password first.', true);
+  if (SUPABASE_URL.includes('REPLACE_') || SUPABASE_ANON_KEY.includes('REPLACE_')) {
+    setStatus(uploadStatus, 'Please edit main.js and set SUPABASE_URL + SUPABASE_ANON_KEY first.', true);
+    return;
+  }
+
+  if (uploadPassword !== UPLOAD_PASSWORD) {
+    setStatus(uploadStatus, 'Wrong upload password.', true);
     return;
   }
 
@@ -44,32 +73,45 @@ async function uploadFile() {
     return;
   }
 
+  if (file.size > MAX_UPLOAD_BYTES) {
+    setStatus(uploadStatus, 'File too big. Max is 50 MB.', true);
+    return;
+  }
+
   uploadBtn.disabled = true;
   generatedCode.textContent = '';
   setStatus(uploadStatus, 'Uploading...');
 
   try {
-    const contentBase64 = await toBase64(file);
+    const code = await createUniqueCode();
+    const objectPath = `${crypto.randomUUID()}-${cleanFileName(file.name)}`;
 
-    const res = await fetch('/api/upload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        uploadPassword,
-        fileName: file.name,
-        contentBase64,
-        contentType: file.type || 'application/octet-stream'
-      })
-    });
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(objectPath, file, { upsert: false });
 
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    if (uploadError) throw uploadError;
+
+    const { error: insertError } = await supabase
+      .from('transfers')
+      .insert({
+        code,
+        object_path: objectPath,
+        original_name: cleanFileName(file.name),
+        content_type: file.type || 'application/octet-stream',
+        created_at: new Date().toISOString()
+      });
+
+    if (insertError) {
+      await supabase.storage.from(BUCKET).remove([objectPath]);
+      throw insertError;
+    }
 
     setStatus(uploadStatus, 'Upload done. Share this code:');
-    generatedCode.textContent = data.code;
+    generatedCode.textContent = code;
     fileInput.value = '';
   } catch (error) {
-    setStatus(uploadStatus, error.message, true);
+    setStatus(uploadStatus, error.message || 'Upload failed', true);
   } finally {
     uploadBtn.disabled = false;
   }
@@ -78,6 +120,11 @@ async function uploadFile() {
 async function downloadWithCode() {
   const code = onlyDigits(downloadCodeInput.value);
   downloadCodeInput.value = code;
+
+  if (SUPABASE_URL.includes('REPLACE_') || SUPABASE_ANON_KEY.includes('REPLACE_')) {
+    setStatus(downloadStatus, 'Please edit main.js and set SUPABASE_URL + SUPABASE_ANON_KEY first.', true);
+    return;
+  }
 
   if (code.length !== 6) {
     setStatus(downloadStatus, 'Code must be 6 digits.', true);
@@ -88,31 +135,47 @@ async function downloadWithCode() {
   setStatus(downloadStatus, 'Checking code...');
 
   try {
-    const res = await fetch(`/api/download?code=${encodeURIComponent(code)}`);
+    const { data: rows, error: rowError } = await supabase
+      .from('transfers')
+      .select('code, object_path, original_name, content_type, created_at')
+      .eq('code', code)
+      .limit(1);
 
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || 'Download failed');
+    if (rowError) throw rowError;
+    if (!rows.length) throw new Error('Code not found or already used.');
+
+    const transfer = rows[0];
+    const age = Date.now() - new Date(transfer.created_at).getTime();
+
+    if (Number.isFinite(age) && age > CODE_TTL_MS) {
+      await supabase.storage.from(BUCKET).remove([transfer.object_path]);
+      await supabase.from('transfers').delete().eq('code', code);
+      throw new Error('Code expired.');
     }
 
-    const blob = await res.blob();
-    const cd = res.headers.get('content-disposition') || '';
-    const match = cd.match(/filename="?([^\"]+)"?/i);
-    const fileName = match ? match[1] : `download-${code}`;
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from(BUCKET)
+      .download(transfer.object_path);
 
+    if (downloadError) throw downloadError;
+
+    await supabase.storage.from(BUCKET).remove([transfer.object_path]);
+    await supabase.from('transfers').delete().eq('code', code);
+
+    const blob = new Blob([fileData], { type: transfer.content_type || 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileName;
+    a.download = transfer.original_name || `download-${code}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
 
-    setStatus(downloadStatus, 'Downloaded. This code is now deleted forever.');
+    setStatus(downloadStatus, 'Downloaded. Code is now used and deleted.');
     downloadCodeInput.value = '';
   } catch (error) {
-    setStatus(downloadStatus, error.message, true);
+    setStatus(downloadStatus, error.message || 'Download failed', true);
   } finally {
     downloadBtn.disabled = false;
   }

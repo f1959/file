@@ -1,38 +1,31 @@
-# Private Send (Supabase version) — very simple setup
+# Private Send (Supabase only, no custom server)
 
-Yes ✅ this version is now **Supabase-based**.
+You were right — now this is **Supabase only**.
+No Node server needed for normal use.
 
-You upload a file -> app gives 6-digit code -> friend downloads -> file auto-deletes.
+## What it does
+1. Upload file (with upload password)
+2. Get random 6-digit code
+3. Other person enters code to download
+4. After download, file/code is deleted
 
----
-
-## What you need
-- Supabase account
-- Node.js installed
-
----
-
-## Step 1) Create Supabase project
-1. Go to https://supabase.com
-2. Click **New project**
-3. Wait until it finishes
+Upload limit is **50 MB max**.
 
 ---
 
-## Step 2) Create storage bucket
-1. Open your Supabase project
-2. Click **Storage**
-3. Click **New bucket**
-4. Bucket name: `private-send-files`
-5. Keep it **Private**
-6. Create bucket
+## Easy setup (very simple)
 
----
+### Step 1) Create Supabase project
+- Go to https://supabase.com
+- Create project
 
-## Step 3) Create transfers table
-1. In Supabase, click **SQL Editor**
-2. Click **New query**
-3. Paste this SQL and run:
+### Step 2) Create bucket
+- Open project -> Storage -> New bucket
+- Name: `private-send-files`
+- Set bucket to **Private**
+
+### Step 3) Create table
+Open SQL Editor and run:
 
 ```sql
 create table if not exists public.transfers (
@@ -42,69 +35,69 @@ create table if not exists public.transfers (
   content_type text,
   created_at timestamptz not null default now()
 );
+
+alter table public.transfers enable row level security;
+
+create policy "anon can read transfers"
+on public.transfers for select
+to anon using (true);
+
+create policy "anon can insert transfers"
+on public.transfers for insert
+to anon with check (true);
+
+create policy "anon can delete transfers"
+on public.transfers for delete
+to anon using (true);
 ```
 
----
+### Step 4) Create storage policies
+Run this SQL too:
 
-## Step 4) Copy 2 values from Supabase
-1. Go to **Project Settings**
-2. Go to **API**
-3. Copy:
-   - **Project URL** (this is `SUPABASE_URL`)
-   - **service_role key** (this is `SUPABASE_SERVICE_ROLE_KEY`)
+```sql
+create policy "anon can upload files"
+on storage.objects for insert
+to anon with check (bucket_id = 'private-send-files');
 
-⚠️ Keep service_role key secret.
+create policy "anon can read files"
+on storage.objects for select
+to anon using (bucket_id = 'private-send-files');
 
----
-
-## Step 5) Create `.env` file in this project
-Create `.env` and paste this:
-
-```bash
-PORT=3000
-UPLOAD_PASSWORD=mysecret123
-SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
-SUPABASE_BUCKET=private-send-files
+create policy "anon can delete files"
+on storage.objects for delete
+to anon using (bucket_id = 'private-send-files');
 ```
 
-### How to change upload password later
-Just change this line in `.env`:
+### Step 5) Get Supabase keys
+Project Settings -> API -> copy:
+- Project URL
+- anon public key
 
-```bash
-UPLOAD_PASSWORD=newpassword456
+### Step 6) Edit `main.js`
+At top of `main.js`, replace these 3 values:
+
+```js
+const SUPABASE_URL = 'REPLACE_WITH_YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'REPLACE_WITH_YOUR_SUPABASE_ANON_KEY';
+const UPLOAD_PASSWORD = 'change-this-upload-password';
 ```
 
-Save file, then restart server.
+### Step 7) Open website
+Just open `index.html` (or deploy to GitHub Pages / Netlify / Vercel).
 
 ---
 
-## Step 6) Install and run
-```bash
-npm install
-npm start
+## How to change upload password
+Open `main.js` and change:
+
+```js
+const UPLOAD_PASSWORD = 'new-password-here';
 ```
 
-Open browser:
-`http://localhost:3000`
+Save and redeploy/reload.
 
 ---
 
-## How to use
-### Upload
-1. Enter upload password
-2. Pick file
-3. Click Upload
-4. Copy 6-digit code
-
-### Download
-1. Enter 6-digit code
-2. Click Download
-3. File downloads and code becomes invalid
-
----
-
-## If something fails
-- **Wrong upload password**: password in website does not match `.env`
-- **Code not found/already used**: wrong code, expired code, or already downloaded
-- **Missing SUPABASE_URL or key**: `.env` is missing values
+## Important note
+Because this is client-only (no server), upload password is in frontend code.
+So this is simple protection, not military-grade security.
