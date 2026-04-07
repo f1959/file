@@ -1,81 +1,103 @@
-# Shared Firebase Notes (GitHub Pages compatible)
+# Private Send (Supabase only, no custom server)
 
-This website is static (works on GitHub Pages) and uses Firebase for:
-- password login,
-- multiple notes (create/edit title/content/delete),
-- per-note commit history,
-- realtime updates.
+You were right — now this is **Supabase only**.
+No Node server needed for normal use.
 
-No backend server is needed.
+## What it does
+1. Upload file (with upload password)
+2. Get random 6-digit code
+3. Other person enters code to download
+4. After download, file/code is deleted
+
+Upload limit is **50 MB max**.
 
 ---
 
-## Easy setup (step by step)
+## Easy setup (very simple)
 
-## 1) In Firebase: create project + web app
+### Step 1) Create Supabase project
+- Go to https://supabase.com
+- Create project
 
-1. Open Firebase Console and create a project.
-2. Add a **Web app**.
-3. Copy the web config values (`apiKey`, `authDomain`, `projectId`, `storageBucket`, `messagingSenderId`, `appId`).
+### Step 2) Create bucket
+- Open project -> Storage -> New bucket
+- Name: `private-send-files`
+- Set bucket to **Private**
 
-## 2) In Firebase: enable login and create shared user
+### Step 3) Create table
+Open SQL Editor and run:
 
-1. Open **Authentication → Sign-in method** and enable **Email/Password**.
-2. Open **Authentication → Users** and create one user:
-   - Email: `sharedemail@email.com` (or your own)
-   - Password: `wnsdud5999@` (or your own)
+```sql
+create table if not exists public.transfers (
+  code text primary key,
+  object_path text not null,
+  original_name text not null,
+  content_type text,
+  created_at timestamptz not null default now()
+);
 
-## 3) In Firebase: create Firestore database
+alter table public.transfers enable row level security;
 
-1. Open **Firestore Database** and create database in production mode.
-2. Open **Rules** and paste this:
+create policy "anon can read transfers"
+on public.transfers for select
+to anon using (true);
 
-```txt
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /notes/{noteId} {
-      allow read, write: if request.auth != null;
+create policy "anon can insert transfers"
+on public.transfers for insert
+to anon with check (true);
 
-      match /commits/{commitId} {
-        allow read, write: if request.auth != null;
-      }
-    }
-  }
-}
+create policy "anon can delete transfers"
+on public.transfers for delete
+to anon using (true);
 ```
 
-## 4) Edit `main.js`
+### Step 4) Create storage policies
+Run this SQL too:
 
-Replace these values:
-- all `REPLACE_ME` entries in `firebaseConfig`
-- `SHARED_EMAIL`
+```sql
+create policy "anon can upload files"
+on storage.objects for insert
+to anon with check (bucket_id = 'private-send-files');
 
-Important:
-- The entered password on the site must match the shared Firebase user password.
+create policy "anon can read files"
+on storage.objects for select
+to anon using (bucket_id = 'private-send-files');
 
-## 5) Deploy on GitHub Pages
+create policy "anon can delete files"
+on storage.objects for delete
+to anon using (bucket_id = 'private-send-files');
+```
 
-1. Push this repo to GitHub.
-2. Open **Settings → Pages**.
-3. Deploy from branch root.
-4. Open your Pages URL.
+### Step 5) Get Supabase keys
+Project Settings -> API -> copy:
+- Project URL
+- anon public key
+
+### Step 6) Edit `main.js`
+At top of `main.js`, replace these 3 values:
+
+```js
+const SUPABASE_URL = 'REPLACE_WITH_YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'REPLACE_WITH_YOUR_SUPABASE_ANON_KEY';
+const UPLOAD_PASSWORD = 'change-this-upload-password';
+```
+
+### Step 7) Open website
+Just open `index.html` (or deploy to GitHub Pages / Netlify / Vercel).
 
 ---
 
-## What to do on the website
+## How to change upload password
+Open `main.js` and change:
 
-- Enter shared password.
-- Click **+ New note** to create notes.
-- Edit note title + text.
-- Click **Commit changes**.
-- See recent commits for the selected note.
-- Click **Delete note** if needed.
+```js
+const UPLOAD_PASSWORD = 'new-password-here';
+```
+
+Save and redeploy/reload.
 
 ---
 
-## Troubleshooting
-
-- **Login failed (`auth/api-key-not-valid`)**: your `firebaseConfig` still has wrong or placeholder values.
-- **Login failed (`auth/invalid-credential`)**: `SHARED_EMAIL`, password, or project is mismatched.
-- **No notes visible / write errors**: Firestore rules were not applied.
+## Important note
+Because this is client-only (no server), upload password is in frontend code.
+So this is simple protection, not military-grade security.
