@@ -144,18 +144,27 @@ async function uploadFile() {
 
     if (uploadError) throw uploadError;
 
-    const { error: insertError } = await supabase
-      .from('transfers')
-      .insert({
-        code,
-        object_path: objectPath,
-        original_name: cleanFileName(file.name),
-        content_type: file.type || 'application/octet-stream',
-        created_at: new Date().toISOString()
-      });
+    const { data: userInfo } = await supabase.auth.getUser();
+    if (!userInfo.user) {
+      await supabase.auth.signOut();
+      uploadUser = null;
+      refreshUploadAuthUI();
+      throw new Error('Upload session expired. Please login again.');
+    }
+
+    const { error: insertError } = await supabase.rpc('create_transfer', {
+      p_code: code,
+      p_object_path: objectPath,
+      p_original_name: cleanFileName(file.name),
+      p_content_type: file.type || 'application/octet-stream',
+      p_created_at: new Date().toISOString()
+    });
 
     if (insertError) {
       await supabase.storage.from(BUCKET).remove([objectPath]);
+      if ((insertError.message || '').toLowerCase().includes('row-level security')) {
+        throw new Error('Supabase policy not ready. Run README SQL step again (create_transfer function).');
+      }
       throw insertError;
     }
 

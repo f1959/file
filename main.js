@@ -1,8 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // ====== CHANGE THESE 3 VALUES ======
-const SUPABASE_URL = 'https://pnyimurfileqbesoasdl.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBueWltdXJmaWxlcWJlc29hc2RsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0NDczMzAsImV4cCI6MjA5MTAyMzMzMH0.HCj5kpgu0D5b4-b02OkejdJrLdo4XX-ZrfzJ8ceW7UY';
+const SUPABASE_URL = 'REPLACE_WITH_YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'REPLACE_WITH_YOUR_SUPABASE_ANON_KEY';
 const SUPABASE_UPLOAD_EMAIL = 'upload-user@example.com';
 // ===================================
 
@@ -144,18 +144,27 @@ async function uploadFile() {
 
     if (uploadError) throw uploadError;
 
-    const { error: insertError } = await supabase
-      .from('transfers')
-      .insert({
-        code,
-        object_path: objectPath,
-        original_name: cleanFileName(file.name),
-        content_type: file.type || 'application/octet-stream',
-        created_at: new Date().toISOString()
-      });
+    const { data: userInfo } = await supabase.auth.getUser();
+    if (!userInfo.user) {
+      await supabase.auth.signOut();
+      uploadUser = null;
+      refreshUploadAuthUI();
+      throw new Error('Upload session expired. Please login again.');
+    }
+
+    const { error: insertError } = await supabase.rpc('create_transfer', {
+      p_code: code,
+      p_object_path: objectPath,
+      p_original_name: cleanFileName(file.name),
+      p_content_type: file.type || 'application/octet-stream',
+      p_created_at: new Date().toISOString()
+    });
 
     if (insertError) {
       await supabase.storage.from(BUCKET).remove([objectPath]);
+      if ((insertError.message || '').toLowerCase().includes('row-level security')) {
+        throw new Error('Supabase policy not ready. Run README SQL step again (create_transfer function).');
+      }
       throw insertError;
     }
 
