@@ -1,81 +1,50 @@
-# Shared Firebase Notes (GitHub Pages compatible)
+# Private Send (one-time 6-digit download code)
 
-This website is static (works on GitHub Pages) and uses Firebase for:
-- password login,
-- multiple notes (create/edit title/content/delete),
-- per-note commit history,
-- realtime updates.
+This is a private "send anywhere" style file share.
 
-No backend server is needed.
+## How it works
+1. Uploader enters **upload password** and uploads a file.
+2. Website gives a **random 6-digit code**.
+3. Receiver enters that 6-digit code and downloads the file.
+4. File is **deleted automatically after first successful download**.
 
 ---
 
-## Easy setup (step by step)
+## Quick setup
 
-## 1) In Firebase: create project + web app
-
-1. Open Firebase Console and create a project.
-2. Add a **Web app**.
-3. Copy the web config values (`apiKey`, `authDomain`, `projectId`, `storageBucket`, `messagingSenderId`, `appId`).
-
-## 2) In Firebase: enable login and create shared user
-
-1. Open **Authentication → Sign-in method** and enable **Email/Password**.
-2. Open **Authentication → Users** and create one user:
-   - Email: `sharedemail@email.com` (or your own)
-   - Password: `wnsdud5999@` (or your own)
-
-## 3) In Firebase: create Firestore database
-
-1. Open **Firestore Database** and create database in production mode.
-2. Open **Rules** and paste this:
-
-```txt
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /notes/{noteId} {
-      allow read, write: if request.auth != null;
-
-      match /commits/{commitId} {
-        allow read, write: if request.auth != null;
-      }
-    }
-  }
-}
+### 1) Install and run
+```bash
+npm install
+npm start
 ```
 
-## 4) Edit `main.js`
+### 2) Set your upload password (important)
+Default password is `upload123!` (change this!).
 
-Replace these values:
-- all `REPLACE_ME` entries in `firebaseConfig`
-- `SHARED_EMAIL`
+Run server with your own password:
+```bash
+UPLOAD_PASSWORD="my-secret-upload-pass" npm start
+```
 
-Important:
-- The entered password on the site must match the shared Firebase user password.
+Optional custom port:
+```bash
+PORT=3000 UPLOAD_PASSWORD="my-secret-upload-pass" npm start
+```
 
-## 5) Deploy on GitHub Pages
-
-1. Push this repo to GitHub.
-2. Open **Settings → Pages**.
-3. Deploy from branch root.
-4. Open your Pages URL.
+### 3) Open in browser
+`http://localhost:3000`
 
 ---
 
-## What to do on the website
-
-- Enter shared password.
-- Click **+ New note** to create notes.
-- Edit note title + text.
-- Click **Commit changes**.
-- See recent commits for the selected note.
-- Click **Delete note** if needed.
+## Notes
+- Code is always 6 digits.
+- Download code is one-time use.
+- Expired files are cleaned up automatically (24 hours).
+- Files are stored on server disk in `data/uploads` until downloaded/expired.
 
 ---
 
 ## Troubleshooting
-
-- **Login failed (`auth/api-key-not-valid`)**: your `firebaseConfig` still has wrong or placeholder values.
-- **Login failed (`auth/invalid-credential`)**: `SHARED_EMAIL`, password, or project is mismatched.
-- **No notes visible / write errors**: Firestore rules were not applied.
+- "Wrong upload password" → check `UPLOAD_PASSWORD` value.
+- "Code not found or already used" → code is wrong, expired, or already downloaded.
+- If server restarts and data folder is removed, old codes will not work.
