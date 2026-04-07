@@ -8,7 +8,7 @@ This is a private "send anywhere" style file share.
 3. Receiver enters that 6-digit code and downloads the file.
 4. File is **deleted automatically after first successful download**.
 
----
+## Setup
 
 ## Quick setup
 
@@ -42,7 +42,7 @@ PORT=3000 UPLOAD_PASSWORD="my-secret-upload-pass" npm start
 - Expired files are cleaned up automatically (24 hours).
 - Files are stored on server disk in `data/uploads` until downloaded/expired.
 
----
+Open `http://localhost:3000`.
 
 ## Troubleshooting
 - "Wrong upload password" → check `UPLOAD_PASSWORD` value.
