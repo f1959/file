@@ -117,6 +117,7 @@ async function loginForUpload() {
   } finally {
     uploadLoginBtn.disabled = false;
   }
+  throw new Error('Could not generate code. Try again.');
 }
 
 async function logoutUpload() {
