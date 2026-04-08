@@ -6,9 +6,6 @@ const { URL } = require('url');
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const DATA_DIR = path.join(__dirname, 'data');
-const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
-const TRANSFERS_FILE = path.join(DATA_DIR, 'transfers.json');
 
 const UPLOAD_PASSWORD = process.env.UPLOAD_PASSWORD || 'upload123!';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
@@ -16,6 +13,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || 'private-send-files';
 const TRANSFER_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 35_000_000;
+const CODE_LENGTH = 3;
 
 function requireConfig() {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -86,7 +84,7 @@ function sanitizeFileName(name) {
 }
 
 function generateCode() {
-  return String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
+  return String(Math.floor(Math.random() * 1_000)).padStart(CODE_LENGTH, '0');
 }
 
 async function supabaseFetch(endpoint, init = {}) {
@@ -204,7 +202,9 @@ async function handleUpload(req, res) {
 }
 
 async function handleDownload(res, code) {
-  if (!/^\d{6}$/.test(code)) return json(res, 400, { error: 'Code must be 6 digits' });
+  if (!new RegExp(`^\\d{${CODE_LENGTH}}$`).test(code)) {
+    return json(res, 400, { error: `Code must be ${CODE_LENGTH} digits` });
+  }
 
   const transfer = await findTransfer(code);
   if (!transfer) return json(res, 404, { error: 'Code not found or already used' });

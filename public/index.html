@@ -47,7 +47,7 @@
           <h1>Side A</h1>
           <p>Enter value.</p>
           <div class="row">
-            <input id="downloadCodeInput" maxlength="6" placeholder="000000" inputmode="numeric" />
+            <input id="downloadCodeInput" maxlength="3" placeholder="000" inputmode="numeric" />
             <button id="downloadBtn">Go</button>
           </div>
           <div id="downloadStatus" class="status"></div>
@@ -63,7 +63,10 @@
           </div>
           <div id="uploadAuthStatus" class="status"></div>
           <div id="uploadActions" class="row hidden">
-            <input id="fileInput" type="file" />
+            <div id="dropZone" style="flex:1; min-width: 220px; border: 1px dashed #62626d; border-radius: 10px; padding: 12px; text-align: center;">
+              <p class="muted" style="margin-bottom: 8px;">Drop file here</p>
+              <input id="fileInput" type="file" style="width:100%" />
+            </div>
             <button id="uploadBtn">Continue</button>
           </div>
           <p id="uploadHint" class="status muted">Locked.</p>

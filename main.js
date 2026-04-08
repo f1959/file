@@ -9,6 +9,7 @@ const SUPABASE_UPLOAD_EMAIL = 'upload-user@example.com';
 const BUCKET = 'private-send-files';
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
 const CODE_TTL_MS = 24 * 60 * 60 * 1000;
+const CODE_LENGTH = 3;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const supabasePublic = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -29,6 +30,7 @@ const uploadLogoutBtn = document.getElementById('uploadLogoutBtn');
 const uploadAuthStatus = document.getElementById('uploadAuthStatus');
 
 const fileInput = document.getElementById('fileInput');
+const dropZone = document.getElementById('dropZone');
 const uploadBtn = document.getElementById('uploadBtn');
 const uploadActions = document.getElementById('uploadActions');
 const uploadHint = document.getElementById('uploadHint');
@@ -36,6 +38,7 @@ const uploadStatus = document.getElementById('uploadStatus');
 const generatedCode = document.getElementById('generatedCode');
 
 let uploadUser = null;
+let selectedUploadFile = null;
 
 function setStatus(target, message, error = false) {
   target.textContent = message;
@@ -43,11 +46,11 @@ function setStatus(target, message, error = false) {
 }
 
 function onlyDigits(value) {
-  return String(value || '').replace(/\D/g, '').slice(0, 6);
+  return String(value || '').replace(/\D/g, '').slice(0, CODE_LENGTH);
 }
 
 function randomCode() {
-  return String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
+  return String(Math.floor(Math.random() * 1_000)).padStart(CODE_LENGTH, '0');
 }
 
 function cleanFileName(name) {
@@ -114,17 +117,20 @@ async function loginForUpload() {
   } finally {
     uploadLoginBtn.disabled = false;
   }
+  throw new Error('Could not generate code. Try again.');
 }
 
 async function logoutUpload() {
   await supabase.auth.signOut();
   uploadUser = null;
+  selectedUploadFile = null;
+  fileInput.value = '';
   refreshUploadAuthUI();
   setStatus(uploadStatus, 'Access closed.');
 }
 
 async function uploadFile() {
-  const file = fileInput.files && fileInput.files[0];
+  const file = selectedUploadFile || (fileInput.files && fileInput.files[0]);
 
   if (!uploadUser) {
     setStatus(uploadStatus, 'Access required first.', true);
@@ -182,6 +188,7 @@ async function uploadFile() {
     setStatus(uploadStatus, 'Done. Use this value:');
     generatedCode.textContent = code;
     fileInput.value = '';
+    selectedUploadFile = null;
   } catch (error) {
     setStatus(uploadStatus, error.message || 'Action failed', true);
   } finally {
@@ -198,8 +205,8 @@ async function downloadWithCode() {
     return;
   }
 
-  if (code.length !== 6) {
-    setStatus(downloadStatus, 'Value must be 6 digits.', true);
+  if (code.length !== CODE_LENGTH) {
+    setStatus(downloadStatus, `Value must be ${CODE_LENGTH} digits.`, true);
     return;
   }
 
@@ -261,9 +268,47 @@ uploadLoginBtn.addEventListener('click', loginForUpload);
 uploadLogoutBtn.addEventListener('click', logoutUpload);
 downloadBtn.addEventListener('click', downloadWithCode);
 uploadBtn.addEventListener('click', uploadFile);
+fileInput.addEventListener('change', () => {
+  selectedUploadFile = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+});
+
+function bindDropZone() {
+  if (!dropZone) return;
+
+  const prevent = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach((eventName) => {
+    dropZone.addEventListener(eventName, prevent);
+  });
+
+  ['dragenter', 'dragover'].forEach((eventName) => {
+    dropZone.addEventListener(eventName, () => {
+      dropZone.style.borderColor = '#9a9aaa';
+      dropZone.style.background = '#2a2a30';
+    });
+  });
+
+  ['dragleave', 'drop'].forEach((eventName) => {
+    dropZone.addEventListener(eventName, () => {
+      dropZone.style.borderColor = '#62626d';
+      dropZone.style.background = 'transparent';
+    });
+  });
+
+  dropZone.addEventListener('drop', (event) => {
+    const droppedFile = event.dataTransfer?.files?.[0] || null;
+    if (!droppedFile) return;
+    selectedUploadFile = droppedFile;
+    setStatus(uploadStatus, `Selected: ${cleanFileName(droppedFile.name)}`);
+  });
+}
 
 (async () => {
   const { data } = await supabase.auth.getSession();
   uploadUser = data.session?.user || null;
   refreshUploadAuthUI();
+  bindDropZone();
 })();
