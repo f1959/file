@@ -10,6 +10,7 @@ const BUCKET = 'private-send-files';
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
 const CODE_TTL_MS = 24 * 60 * 60 * 1000;
 const CODE_LENGTH = 3;
+const LEGACY_CODE_LENGTH = 6;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const supabasePublic = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -31,6 +32,7 @@ const uploadAuthStatus = document.getElementById('uploadAuthStatus');
 
 const fileInput = document.getElementById('fileInput');
 const dropZone = document.getElementById('dropZone');
+const selectedFileName = document.getElementById('selectedFileName');
 const uploadBtn = document.getElementById('uploadBtn');
 const uploadActions = document.getElementById('uploadActions');
 const uploadHint = document.getElementById('uploadHint');
@@ -42,11 +44,16 @@ let selectedUploadFile = null;
 
 function setStatus(target, message, error = false) {
   target.textContent = message;
-  target.style.color = error ? '#b42318' : '#475467';
+  target.style.color = error ? '#ff6b6b' : '#b8b8c5';
+}
+
+function updateSelectedFileName(file) {
+  if (!selectedFileName) return;
+  selectedFileName.textContent = file ? cleanFileName(file.name) : 'No file selected';
 }
 
 function onlyDigits(value) {
-  return String(value || '').replace(/\D/g, '').slice(0, CODE_LENGTH);
+  return String(value || '').replace(/\D/g, '').slice(0, LEGACY_CODE_LENGTH);
 }
 
 function randomCode() {
@@ -124,6 +131,7 @@ async function logoutUpload() {
   uploadUser = null;
   selectedUploadFile = null;
   fileInput.value = '';
+  updateSelectedFileName(null);
   refreshUploadAuthUI();
   setStatus(uploadStatus, 'Access closed.');
 }
@@ -188,6 +196,7 @@ async function uploadFile() {
     generatedCode.textContent = code;
     fileInput.value = '';
     selectedUploadFile = null;
+    updateSelectedFileName(null);
   } catch (error) {
     setStatus(uploadStatus, error.message || 'Action failed', true);
   } finally {
@@ -204,8 +213,8 @@ async function downloadWithCode() {
     return;
   }
 
-  if (code.length !== CODE_LENGTH) {
-    setStatus(downloadStatus, `Value must be ${CODE_LENGTH} digits.`, true);
+  if (code.length !== CODE_LENGTH && code.length !== LEGACY_CODE_LENGTH) {
+    setStatus(downloadStatus, `Value must be ${CODE_LENGTH} or ${LEGACY_CODE_LENGTH} digits.`, true);
     return;
   }
 
@@ -269,6 +278,7 @@ downloadBtn.addEventListener('click', downloadWithCode);
 uploadBtn.addEventListener('click', uploadFile);
 fileInput.addEventListener('change', () => {
   selectedUploadFile = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+  updateSelectedFileName(selectedUploadFile);
 });
 
 function bindDropZone() {
@@ -301,7 +311,8 @@ function bindDropZone() {
     const droppedFile = event.dataTransfer?.files?.[0] || null;
     if (!droppedFile) return;
     selectedUploadFile = droppedFile;
-    setStatus(uploadStatus, `Selected: ${cleanFileName(droppedFile.name)}`);
+    updateSelectedFileName(droppedFile);
+    setStatus(uploadStatus, 'Item selected.');
   });
 }
 
@@ -309,5 +320,6 @@ function bindDropZone() {
   const { data } = await supabase.auth.getSession();
   uploadUser = data.session?.user || null;
   refreshUploadAuthUI();
+  updateSelectedFileName(null);
   bindDropZone();
 })();

@@ -14,6 +14,7 @@ const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || 'private-send-files';
 const TRANSFER_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 35_000_000;
 const CODE_LENGTH = 3;
+const LEGACY_CODE_LENGTH = 6;
 
 function requireConfig() {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -202,8 +203,8 @@ async function handleUpload(req, res) {
 }
 
 async function handleDownload(res, code) {
-  if (!new RegExp(`^\\d{${CODE_LENGTH}}$`).test(code)) {
-    return json(res, 400, { error: `Code must be ${CODE_LENGTH} digits` });
+  if (!new RegExp(`^\\d{${CODE_LENGTH}}$|^\\d{${LEGACY_CODE_LENGTH}}$`).test(code)) {
+    return json(res, 400, { error: `Code must be ${CODE_LENGTH} or ${LEGACY_CODE_LENGTH} digits` });
   }
 
   const transfer = await findTransfer(code);

@@ -37,6 +37,48 @@
       }
       .muted { color: #9a9aaa; }
       .hidden { display: none; }
+      .drop-zone {
+        flex: 1;
+        min-width: 220px;
+        border: 1px dashed #62626d;
+        border-radius: 12px;
+        padding: 12px;
+        text-align: center;
+      }
+      .file-picker {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        margin-top: 8px;
+      }
+      .file-btn {
+        display: inline-block;
+        border: 1px solid #6b6b74;
+        border-radius: 8px;
+        padding: 8px 10px;
+        cursor: pointer;
+        background: #393944;
+        color: #fff;
+      }
+      .file-name {
+        font-size: .86rem;
+        color: #c5c5d2;
+        max-width: 200px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        border: 0;
+      }
       @media (max-width: 860px){ .grid{ grid-template-columns: 1fr; } }
     </style>
   </head>
@@ -47,7 +89,7 @@
           <h1>Side A</h1>
           <p>Enter value.</p>
           <div class="row">
-            <input id="downloadCodeInput" maxlength="3" placeholder="000" inputmode="numeric" />
+            <input id="downloadCodeInput" maxlength="6" placeholder="000 or 000000" inputmode="numeric" />
             <button id="downloadBtn">Go</button>
           </div>
           <div id="downloadStatus" class="status"></div>
@@ -63,9 +105,13 @@
           </div>
           <div id="uploadAuthStatus" class="status"></div>
           <div id="uploadActions" class="row hidden">
-            <div id="dropZone" style="flex:1; min-width: 220px; border: 1px dashed #62626d; border-radius: 10px; padding: 12px; text-align: center;">
-              <p class="muted" style="margin-bottom: 8px;">Drop file here</p>
-              <input id="fileInput" type="file" style="width:100%" />
+            <div id="dropZone" class="drop-zone">
+              <p class="muted">Drop file here</p>
+              <div class="file-picker">
+                <label for="fileInput" class="file-btn">Choose file</label>
+                <span id="selectedFileName" class="file-name">No file selected</span>
+              </div>
+              <input id="fileInput" type="file" class="sr-only" />
             </div>
             <button id="uploadBtn">Continue</button>
           </div>

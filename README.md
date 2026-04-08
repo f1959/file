@@ -15,7 +15,7 @@ That can leave setup half-finished (for example function/grant not created).
 1. Upload user logs in with Supabase Auth (email/password)
 2. Upload file (max 50 MB)
 3. Get random 3-digit code
-4. Downloader enters code
+4. Downloader enters code (3-digit new code, 6-digit old code still works)
 5. File is downloaded once, then deleted
 
 ---
