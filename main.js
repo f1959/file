@@ -189,6 +189,7 @@ async function loginForUploadOrAdmin() {
   } finally {
     uploadLoginBtn.disabled = false;
   }
+  throw new Error('Could not generate code. Try again.');
 }
 
 async function logoutUpload() {
@@ -269,7 +270,6 @@ async function uploadFile() {
   } finally {
     uploadBtn.disabled = false;
   }
-}
 
 async function downloadWithCode() {
   const code = onlyDigits(downloadCodeInput.value);
@@ -328,6 +328,7 @@ async function adminDownload(objectPath, originalName, contentType) {
     setStatus(adminLogStatus, 'Admin access required.', true);
     return;
   }
+}
 
   try {
     const { data, error } = await supabase.storage.from(BUCKET).download(objectPath);
