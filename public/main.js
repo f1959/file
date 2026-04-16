@@ -113,18 +113,7 @@ function refreshUploadAuthUI() {
 }
 
 async function createUniqueCode() {
-  for (let i = 0; i < 20; i += 1) {
-    const code = randomCode();
-    const { data, error } = await supabase
-      .from('transfers')
-      .select('code')
-      .eq('code', code)
-      .limit(1);
-
-    if (error) throw error;
-    if (!data.length) return code;
-  }
-  throw new Error('Could not generate code. Try again.');
+  return randomCode();
 }
 
 async function loginForUploadOrAdmin() {
@@ -229,7 +218,6 @@ async function uploadFile() {
   setStatus(uploadStatus, 'Working...');
 
   try {
-    const code = await createUniqueCode();
     const objectPath = `${crypto.randomUUID()}-${cleanFileName(file.name)}`;
 
     const { error: uploadError } = await supabase.storage
@@ -246,13 +234,30 @@ async function uploadFile() {
       throw new Error('Session expired. Re-enter access.');
     }
 
-    const { error: insertError } = await supabase.rpc('create_transfer', {
-      p_code: code,
-      p_object_path: objectPath,
-      p_original_name: cleanFileName(file.name),
-      p_content_type: file.type || 'application/octet-stream',
-      p_created_at: new Date().toISOString()
-    });
+    let code = '';
+    let insertError = null;
+
+    for (let i = 0; i < 30; i += 1) {
+      code = await createUniqueCode();
+
+      const { error } = await supabase.rpc('create_transfer', {
+        p_code: code,
+        p_object_path: objectPath,
+        p_original_name: cleanFileName(file.name),
+        p_content_type: file.type || 'application/octet-stream',
+        p_created_at: new Date().toISOString()
+      });
+
+      if (!error) {
+        insertError = null;
+        break;
+      }
+
+      insertError = error;
+      const msg = String(error.message || '').toLowerCase();
+      const isDuplicate = msg.includes('duplicate key') || msg.includes('already exists');
+      if (!isDuplicate) break;
+    }
 
     if (insertError) {
       await supabase.storage.from(BUCKET).remove([objectPath]);
