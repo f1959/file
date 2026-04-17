@@ -47,7 +47,7 @@ const adminLogList = document.getElementById('adminLogList');
 
 let uploadUser = null;
 let adminUser = null;
-let selectedUploadFile = null;
+let selectedUploadFiles = [];
 let awaitingAdminPassword = false;
 
 function setStatus(target, message, error = false) {
@@ -56,9 +56,19 @@ function setStatus(target, message, error = false) {
   target.style.color = error ? '#ff6b6b' : '#b8b8c5';
 }
 
-function updateSelectedFileName(file) {
+function updateSelectedFileName(files) {
   if (!selectedFileName) return;
-  selectedFileName.textContent = file ? cleanFileName(file.name) : 'No file selected';
+  if (!files || !files.length) {
+    selectedFileName.textContent = 'No files selected';
+    return;
+  }
+
+  if (files.length === 1) {
+    selectedFileName.textContent = cleanFileName(files[0].name);
+    return;
+  }
+
+  selectedFileName.textContent = `${files.length} files selected`;
 }
 
 function onlyDigits(value) {
@@ -191,10 +201,10 @@ async function logoutUpload() {
   await supabase.auth.signOut();
   uploadUser = null;
   adminUser = null;
-  selectedUploadFile = null;
+  selectedUploadFiles = [];
   awaitingAdminPassword = false;
   fileInput.value = '';
-  updateSelectedFileName(null);
+  updateSelectedFileName([]);
   uploadLoginPasswordInput.value = '';
   if (adminLogList) adminLogList.innerHTML = '';
   setStatus(adminLogStatus, '');
@@ -202,22 +212,67 @@ async function logoutUpload() {
   setStatus(uploadStatus, 'Access closed.');
 }
 
+async function uploadSingleFile(file) {
+  const objectPath = `${crypto.randomUUID()}-${cleanFileName(file.name)}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(BUCKET)
+    .upload(objectPath, file, { upsert: false });
+
+  if (uploadError) throw uploadError;
+
+  let code = '';
+  let insertError = null;
+
+  for (let i = 0; i < 30; i += 1) {
+    code = await createUniqueCode();
+
+    const { error } = await supabase.rpc('create_transfer', {
+      p_code: code,
+      p_object_path: objectPath,
+      p_original_name: cleanFileName(file.name),
+      p_content_type: file.type || 'application/octet-stream',
+      p_created_at: new Date().toISOString()
+    });
+
+    if (!error) {
+      insertError = null;
+      break;
+    }
+
+    insertError = error;
+    const msg = String(error.message || '').toLowerCase();
+    const isDuplicate = msg.includes('duplicate key') || msg.includes('already exists');
+    if (!isDuplicate) break;
+  }
+
+  if (insertError) {
+    await supabase.storage.from(BUCKET).remove([objectPath]);
+    throw insertError;
+  }
+
+  return code;
+}
+
 async function uploadFile() {
-  const file = selectedUploadFile || (fileInput.files && fileInput.files[0]);
+  const filesFromInput = fileInput?.files ? Array.from(fileInput.files) : [];
+  const files = selectedUploadFiles.length ? selectedUploadFiles : filesFromInput;
 
   if (!uploadUser) {
     setStatus(uploadStatus, 'Upload access required first.', true);
     return;
   }
 
-  if (!file) {
-    setStatus(uploadStatus, 'Select an item first.', true);
+  if (!files.length) {
+    setStatus(uploadStatus, 'Select one or more items first.', true);
     return;
   }
 
-  if (file.size > MAX_UPLOAD_BYTES) {
-    setStatus(uploadStatus, 'Item too large (max 50 MB).', true);
-    return;
+  for (const file of files) {
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setStatus(uploadStatus, `Item too large (max 50 MB): ${cleanFileName(file.name)}`, true);
+      return;
+    }
   }
 
   uploadBtn.disabled = true;
@@ -225,14 +280,6 @@ async function uploadFile() {
   setStatus(uploadStatus, 'Working...');
 
   try {
-    const objectPath = `${crypto.randomUUID()}-${cleanFileName(file.name)}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from(BUCKET)
-      .upload(objectPath, file, { upsert: false });
-
-    if (uploadError) throw uploadError;
-
     const { data: userInfo } = await supabase.auth.getUser();
     if (!userInfo.user) {
       await supabase.auth.signOut();
@@ -241,41 +288,34 @@ async function uploadFile() {
       throw new Error('Session expired. Re-enter access.');
     }
 
-    let code = '';
-    let insertError = null;
+    const uploaded = [];
+    const failed = [];
 
-    for (let i = 0; i < 30; i += 1) {
-      code = await createUniqueCode();
-
-      const { error } = await supabase.rpc('create_transfer', {
-        p_code: code,
-        p_object_path: objectPath,
-        p_original_name: cleanFileName(file.name),
-        p_content_type: file.type || 'application/octet-stream',
-        p_created_at: new Date().toISOString()
-      });
-
-      if (!error) {
-        insertError = null;
-        break;
+    for (const file of files) {
+      try {
+        const code = await uploadSingleFile(file);
+        uploaded.push({ name: cleanFileName(file.name), code });
+      } catch (error) {
+        failed.push(`${cleanFileName(file.name)} (${error.message || 'failed'})`);
       }
-
-      insertError = error;
-      const msg = String(error.message || '').toLowerCase();
-      const isDuplicate = msg.includes('duplicate key') || msg.includes('already exists');
-      if (!isDuplicate) break;
     }
 
-    if (insertError) {
-      await supabase.storage.from(BUCKET).remove([objectPath]);
-      throw insertError;
+    if (!uploaded.length) {
+      throw new Error(failed[0] || 'Upload failed.');
     }
 
-    setStatus(uploadStatus, 'Done. Use this value:');
-    generatedCode.textContent = code;
+    generatedCode.textContent = uploaded.map((item) => `${item.code} - ${item.name}`).join('\n');
+    const successText = `${uploaded.length} file(s) uploaded.`;
+    const failText = failed.length ? ` ${failed.length} failed.` : '';
+    setStatus(uploadStatus, `Done. ${successText}${failText}`);
+
+    if (failed.length) {
+      setStatus(uploadAuthStatus, `Failed: ${failed.join(', ')}`, true);
+    }
+
     fileInput.value = '';
-    selectedUploadFile = null;
-    updateSelectedFileName(null);
+    selectedUploadFiles = [];
+    updateSelectedFileName([]);
   } catch (error) {
     setStatus(uploadStatus, error.message || 'Action failed', true);
   } finally {
@@ -448,8 +488,8 @@ if (adminRefreshBtn) adminRefreshBtn.addEventListener('click', loadAdminLogs);
 
 if (fileInput) {
   fileInput.addEventListener('change', () => {
-    selectedUploadFile = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
-    updateSelectedFileName(selectedUploadFile);
+    selectedUploadFiles = fileInput.files ? Array.from(fileInput.files) : [];
+    updateSelectedFileName(selectedUploadFiles);
   });
 }
 
@@ -481,11 +521,11 @@ function bindDropZone() {
 
   dropZone.addEventListener('drop', (event) => {
     if (!uploadUser) return;
-    const droppedFile = event.dataTransfer?.files?.[0] || null;
-    if (!droppedFile) return;
-    selectedUploadFile = droppedFile;
-    updateSelectedFileName(droppedFile);
-    setStatus(uploadStatus, 'Item selected.');
+    const droppedFiles = event.dataTransfer?.files ? Array.from(event.dataTransfer.files) : [];
+    if (!droppedFiles.length) return;
+    selectedUploadFiles = droppedFiles;
+    updateSelectedFileName(droppedFiles);
+    setStatus(uploadStatus, `${droppedFiles.length} item(s) selected.`);
   });
 }
 
@@ -505,7 +545,7 @@ function bindDropZone() {
   }
 
   refreshUploadAuthUI();
-  updateSelectedFileName(null);
+  updateSelectedFileName([]);
   bindDropZone();
 
   if (adminUser) {
