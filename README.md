@@ -238,9 +238,11 @@ Optional (recommended) global config object before loading `app.js`:
 - If you accidentally entered admin mode, type `admin` and submit again to cancel admin mode.
 
 ## Notes
-- Upload max size is 50 MB.
+- Upload max size is 50 MB for normal upload accounts.
+- Admin account can upload files over 50 MB using automatic chunk split upload (chunks are reassembled on download).
 - Server-side upload limit is aligned to 50 MB as well.
-- You can upload multiple files in one batch (each file still max 50 MB).
+- You can upload multiple files in one batch.
 - Selected files appear in a queue under upload area; click `×` to remove/cancel before upload.
 - New codes are 3 digits.
 - Legacy 6-digit code input is still accepted.
+- Supabase JS SDK now uses CDN fallback order (`esm.sh` -> `jsdelivr` -> `unpkg`) to reduce network/CDN-specific load failures.

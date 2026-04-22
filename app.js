@@ -1,16 +1,36 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+async function loadSupabaseCreateClient() {
+  const cdnCandidates = [
+    'https://esm.sh/@supabase/supabase-js@2',
+    'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm',
+    'https://unpkg.com/@supabase/supabase-js@2/dist/module/index.js'
+  ];
+
+  for (const url of cdnCandidates) {
+    try {
+      const mod = await import(url);
+      if (typeof mod.createClient === 'function') return mod.createClient;
+    } catch {
+      // try next CDN
+    }
+  }
+
+  throw new Error('Could not load Supabase SDK from CDN. Check your network/firewall and try again.');
+}
+
+const createClient = await loadSupabaseCreateClient();
 
 const APP_CONFIG = globalThis.PRIVATE_SEND_CONFIG || {};
 
 // ====== CHANGE THESE 4 VALUES ======
-const SUPABASE_URL = 'https://pnyimurfileqbesoasdl.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBueWltdXJmaWxlcWJlc29hc2RsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0NDczMzAsImV4cCI6MjA5MTAyMzMzMH0.HCj5kpgu0D5b4-b02OkejdJrLdo4XX-ZrfzJ8ceW7UY';
+const SUPABASE_URL = APP_CONFIG.SUPABASE_URL || 'https://pnyimurfileqbesoasdl.supabase.co';
+const SUPABASE_ANON_KEY = APP_CONFIG.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBueWltdXJmaWxlcWJlc29hc2RsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0NDczMzAsImV4cCI6MjA5MTAyMzMzMH0.HCj5kpgu0D5b4-b02OkejdJrLdo4XX-ZrfzJ8ceW7UY';
 const SUPABASE_UPLOAD_EMAIL = APP_CONFIG.SUPABASE_UPLOAD_EMAIL || 'upload-user@example.com';
 const SUPABASE_ADMIN_EMAIL = APP_CONFIG.SUPABASE_ADMIN_EMAIL || 'admin@email.com';
 // ===================================
 
 const BUCKET = 'private-send-files';
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
+const CHUNK_UPLOAD_BYTES = 45 * 1024 * 1024; // under provider soft-limit
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const CODE_LENGTH = 3;
 const LEGACY_CODE_LENGTH = 6;
@@ -54,6 +74,8 @@ let adminUser = null;
 let selectedUploadFiles = [];
 let uploadFileQueue = [];
 let awaitingAdminPassword = false;
+
+const MANIFEST_CONTENT_TYPE = 'application/x-private-send-manifest+json';
 
 function setStatus(target, message, error = false) {
   if (!target) return;
@@ -193,6 +215,107 @@ function isFresh(createdAt) {
   return Number.isFinite(age) && age <= RETENTION_MS;
 }
 
+function isManifestTransfer(transfer) {
+  return transfer?.content_type === MANIFEST_CONTENT_TYPE || String(transfer?.object_path || '').endsWith('.manifest.json');
+}
+
+async function uploadChunkedFile(file, queueId) {
+  const prefix = crypto.randomUUID();
+  const safeName = cleanFileName(file.name);
+  const totalChunks = Math.ceil(file.size / CHUNK_UPLOAD_BYTES);
+  const chunkPaths = [];
+
+  for (let index = 0; index < totalChunks; index += 1) {
+    const start = index * CHUNK_UPLOAD_BYTES;
+    const end = Math.min(file.size, start + CHUNK_UPLOAD_BYTES);
+    const chunkBlob = file.slice(start, end);
+    const chunkPath = `${prefix}/chunks/${String(index + 1).padStart(4, '0')}.part`;
+    const { error } = await supabase.storage.from(BUCKET).upload(chunkPath, chunkBlob, { upsert: false });
+    if (error) throw error;
+    chunkPaths.push(chunkPath);
+    const progress = 20 + Math.round(((index + 1) / totalChunks) * 65);
+    updateQueueItem(queueId, { progress: Math.min(progress, 95) });
+  }
+
+  const manifest = {
+    kind: 'chunked-transfer',
+    originalName: safeName,
+    originalType: file.type || 'application/octet-stream',
+    totalSize: file.size,
+    chunkSize: CHUNK_UPLOAD_BYTES,
+    totalChunks,
+    chunks: chunkPaths
+  };
+
+  const manifestPath = `${prefix}/manifest.json`;
+  const manifestBlob = new Blob([JSON.stringify(manifest)], { type: MANIFEST_CONTENT_TYPE });
+  const { error: manifestError } = await supabase.storage.from(BUCKET).upload(manifestPath, manifestBlob, { upsert: false });
+  if (manifestError) {
+    await supabase.storage.from(BUCKET).remove(chunkPaths).catch(() => {});
+    throw manifestError;
+  }
+
+  return {
+    objectPath: manifestPath,
+    originalName: safeName,
+    contentType: MANIFEST_CONTENT_TYPE,
+    cleanupPaths: [...chunkPaths, manifestPath]
+  };
+}
+
+async function resolveTransferFile(transfer, storageClient = supabasePublic) {
+  if (!isManifestTransfer(transfer)) {
+    const { data, error } = await storageClient.storage.from(BUCKET).download(transfer.object_path);
+    if (error) throw error;
+    return {
+      blob: data,
+      filename: transfer.original_name || 'download.bin',
+      contentType: transfer.content_type
+    };
+  }
+
+  const { data: manifestBlob, error: manifestError } = await storageClient.storage.from(BUCKET).download(transfer.object_path);
+  if (manifestError) throw manifestError;
+
+  const manifest = JSON.parse(await manifestBlob.text());
+  if (!Array.isArray(manifest.chunks) || !manifest.chunks.length) {
+    throw new Error('Manifest invalid: no chunks found.');
+  }
+
+  const chunkBlobs = [];
+  for (const chunkPath of manifest.chunks) {
+    const { data: chunkData, error: chunkError } = await storageClient.storage.from(BUCKET).download(chunkPath);
+    if (chunkError) throw chunkError;
+    chunkBlobs.push(chunkData);
+  }
+
+  return {
+    blob: new Blob(chunkBlobs, { type: manifest.originalType || 'application/octet-stream' }),
+    filename: manifest.originalName || transfer.original_name || 'download.bin',
+    contentType: manifest.originalType || 'application/octet-stream'
+  };
+}
+
+async function deleteTransferAssets(transfer, storageClient = supabase) {
+  const paths = [transfer.object_path];
+  if (isManifestTransfer(transfer)) {
+    try {
+      const { data: manifestBlob, error } = await storageClient.storage.from(BUCKET).download(transfer.object_path);
+      if (!error) {
+        const manifest = JSON.parse(await manifestBlob.text());
+        if (Array.isArray(manifest.chunks)) {
+          for (const pathItem of manifest.chunks) paths.push(pathItem);
+        }
+      }
+    } catch {
+      // best effort cleanup only
+    }
+  }
+
+  const uniquePaths = [...new Set(paths)];
+  await storageClient.storage.from(BUCKET).remove(uniquePaths);
+}
+
 function triggerDownload(blobLike, filename, contentType) {
   const blob = new Blob([blobLike], { type: contentType || 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
@@ -321,14 +444,27 @@ async function logoutUpload() {
 async function uploadSingleFile(queueItem) {
   const { file } = queueItem;
   updateQueueItem(queueItem.id, { status: 'uploading', progress: 15, error: '' });
-  const objectPath = `${crypto.randomUUID()}-${cleanFileName(file.name)}`;
+  let uploadTarget = {
+    objectPath: `${crypto.randomUUID()}-${cleanFileName(file.name)}`,
+    originalName: cleanFileName(file.name),
+    contentType: file.type || 'application/octet-stream',
+    cleanupPaths: []
+  };
 
-  const { error: uploadError } = await supabase.storage
-    .from(BUCKET)
-    .upload(objectPath, file, { upsert: false });
+  if (file.size > MAX_UPLOAD_BYTES) {
+    if (!adminUser) {
+      throw new Error('Over 50MB is admin-only.');
+    }
+    uploadTarget = await uploadChunkedFile(file, queueItem.id);
+  } else {
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(uploadTarget.objectPath, file, { upsert: false });
 
-  if (uploadError) throw uploadError;
-  updateQueueItem(queueItem.id, { progress: 60 });
+    if (uploadError) throw uploadError;
+    uploadTarget.cleanupPaths = [uploadTarget.objectPath];
+    updateQueueItem(queueItem.id, { progress: 60 });
+  }
 
   let code = '';
   let insertError = null;
@@ -338,9 +474,9 @@ async function uploadSingleFile(queueItem) {
 
     const { error } = await supabase.rpc('create_transfer', {
       p_code: code,
-      p_object_path: objectPath,
-      p_original_name: cleanFileName(file.name),
-      p_content_type: file.type || 'application/octet-stream',
+      p_object_path: uploadTarget.objectPath,
+      p_original_name: uploadTarget.originalName,
+      p_content_type: uploadTarget.contentType,
       p_created_at: new Date().toISOString()
     });
 
@@ -356,7 +492,7 @@ async function uploadSingleFile(queueItem) {
   }
 
   if (insertError) {
-    await supabase.storage.from(BUCKET).remove([objectPath]);
+    await supabase.storage.from(BUCKET).remove(uploadTarget.cleanupPaths);
     throw insertError;
   }
 
@@ -378,8 +514,8 @@ async function uploadFile() {
   }
 
   for (const { file } of queuedItems) {
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setStatus(uploadStatus, `Item too large (max 50 MB): ${cleanFileName(file.name)}`, true);
+    if (file.size > MAX_UPLOAD_BYTES && !adminUser) {
+      setStatus(uploadStatus, `Item too large for this account (max 50 MB): ${cleanFileName(file.name)}`, true);
       return;
     }
   }
@@ -469,13 +605,8 @@ async function downloadWithCode() {
       throw new Error('Value expired.');
     }
 
-    const { data: fileData, error: downloadError } = await supabasePublic.storage
-      .from(BUCKET)
-      .download(transfer.object_path);
-
-    if (downloadError) throw downloadError;
-
-    triggerDownload(fileData, transfer.original_name || `download-${code}`, transfer.content_type);
+    const resolved = await resolveTransferFile(transfer, supabasePublic);
+    triggerDownload(resolved.blob, resolved.filename || `download-${code}`, resolved.contentType);
 
     setStatus(downloadStatus, 'Completed. Value is now invalid.');
     downloadCodeInput.value = '';
@@ -493,9 +624,11 @@ async function adminDownload(objectPath, originalName, contentType) {
   }
 
   try {
-    const { data, error } = await supabase.storage.from(BUCKET).download(objectPath);
-    if (error) throw error;
-    triggerDownload(data, originalName || 'file.bin', contentType);
+    const resolved = await resolveTransferFile(
+      { object_path: objectPath, original_name: originalName, content_type: contentType },
+      supabase
+    );
+    triggerDownload(resolved.blob, resolved.filename || 'file.bin', resolved.contentType);
   } catch (error) {
     setStatus(adminLogStatus, error.message || 'Admin download failed.', true);
   }
@@ -565,7 +698,7 @@ async function loadAdminLogs() {
 
     const expiredRows = rows.filter((row) => !isFresh(row.created_at));
     for (const row of expiredRows) {
-      await supabase.storage.from(BUCKET).remove([row.object_path]);
+      await deleteTransferAssets(row, supabase).catch(() => {});
       await supabase.from('transfers').delete().eq('object_path', row.object_path);
     }
 
