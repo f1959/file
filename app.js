@@ -35,14 +35,30 @@ const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const CODE_LENGTH = 3;
 const LEGACY_CODE_LENGTH = 6;
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const supabasePublic = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false,
-    detectSessionInUrl: false
+function isValidHttpUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''));
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
   }
-});
+}
+
+const hasValidSupabaseConfig = isValidHttpUrl(SUPABASE_URL) && /^eyJ/.test(String(SUPABASE_ANON_KEY || ''));
+const CONFIG_ERROR_MESSAGE = hasValidSupabaseConfig
+  ? ''
+  : 'Invalid Supabase config. Set valid SUPABASE_URL (http/https) and SUPABASE_ANON_KEY first.';
+
+const supabase = hasValidSupabaseConfig ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+const supabasePublic = hasValidSupabaseConfig
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false
+      }
+    })
+  : null;
 
 const downloadCodeInput = document.getElementById('downloadCodeInput');
 const downloadBtn = document.getElementById('downloadBtn');
@@ -80,6 +96,12 @@ function setStatus(target, message, error = false) {
   if (!target) return;
   target.textContent = message;
   target.style.color = error ? '#ff6b6b' : '#b8b8c5';
+}
+
+function ensureSupabaseReady(statusTarget = null) {
+  if (hasValidSupabaseConfig && supabase && supabasePublic) return true;
+  if (statusTarget) setStatus(statusTarget, CONFIG_ERROR_MESSAGE, true);
+  return false;
 }
 
 function updateSelectedFileName(files) {
@@ -294,8 +316,7 @@ async function createTransferRowForObject(objectPath, originalName, contentType)
 }
 
 async function loginForUploadOrAdmin() {
-  if (SUPABASE_URL.includes('REPLACE_') || SUPABASE_ANON_KEY.includes('REPLACE_')) {
-    setStatus(uploadAuthStatus, 'Please set SUPABASE_URL + SUPABASE_ANON_KEY in app.js.', true);
+  if (!ensureSupabaseReady(uploadAuthStatus)) {
     return;
   }
 
@@ -422,6 +443,7 @@ async function uploadSingleFile(queueItem) {
 }
 
 async function uploadFile() {
+  if (!ensureSupabaseReady(uploadStatus)) return;
   const queuedItems = uploadFileQueue.filter((item) => item.status === 'queued');
   const canUpload = Boolean(uploadUser || adminUser);
 
@@ -494,13 +516,9 @@ async function uploadFile() {
 }
 
 async function downloadWithCode() {
+  if (!ensureSupabaseReady(downloadStatus)) return;
   const code = onlyDigits(downloadCodeInput.value);
   downloadCodeInput.value = code;
-
-  if (SUPABASE_URL.includes('REPLACE_') || SUPABASE_ANON_KEY.includes('REPLACE_')) {
-    setStatus(downloadStatus, 'Please set SUPABASE_URL + SUPABASE_ANON_KEY in app.js.', true);
-    return;
-  }
 
   if (code.length !== CODE_LENGTH && code.length !== LEGACY_CODE_LENGTH) {
     setStatus(downloadStatus, `Value must be ${CODE_LENGTH} or ${LEGACY_CODE_LENGTH} digits.`, true);
@@ -606,6 +624,7 @@ function renderAdminRows(rows) {
 
 async function loadAdminLogs() {
   if (!adminUser) return;
+  if (!ensureSupabaseReady(adminLogStatus)) return;
 
   adminRefreshBtn.disabled = true;
   setStatus(adminLogStatus, 'Loading...');
@@ -723,6 +742,12 @@ function bindDropZone() {
 (async () => {
   if (!downloadCodeInput || !downloadBtn || !uploadLoginPasswordInput || !uploadLoginBtn) {
     console.error('UI wiring failed: required elements are missing.');
+    return;
+  }
+
+  if (!ensureSupabaseReady(uploadAuthStatus)) {
+    if (uploadBtn) uploadBtn.disabled = true;
+    if (downloadBtn) downloadBtn.disabled = true;
     return;
   }
 
