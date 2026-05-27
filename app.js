@@ -22,15 +22,15 @@ const createClient = await loadSupabaseCreateClient();
 const APP_CONFIG = globalThis.PRIVATE_SEND_CONFIG || {};
 
 // ====== CHANGE THESE 4 VALUES ======
-const SUPABASE_URL = APP_CONFIG.SUPABASE_URL || 'https://pnyimurfileqbesoasdl.supabase.co';
-const SUPABASE_ANON_KEY = APP_CONFIG.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBueWltdXJmaWxlcWJlc29hc2RsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0NDczMzAsImV4cCI6MjA5MTAyMzMzMH0.HCj5kpgu0D5b4-b02OkejdJrLdo4XX-ZrfzJ8ceW7UY';
+const SUPABASE_URL = APP_CONFIG.SUPABASE_URL || 'REPLACE_SUPABASE_URL';
+const SUPABASE_ANON_KEY = APP_CONFIG.SUPABASE_ANON_KEY || 'REPLACE_SUPABASE_ANON_KEY';
 const SUPABASE_UPLOAD_EMAIL = APP_CONFIG.SUPABASE_UPLOAD_EMAIL || 'upload-user@example.com';
 const SUPABASE_ADMIN_EMAIL = APP_CONFIG.SUPABASE_ADMIN_EMAIL || 'admin@email.com';
 // ===================================
 
 const BUCKET = 'private-send-files';
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
-const CHUNK_UPLOAD_BYTES = 45 * 1024 * 1024; // under provider soft-limit
+const SPLIT_PART_BYTES = 50 * 1024 * 1024; // 50MB per part
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const CODE_LENGTH = 3;
 const LEGACY_CODE_LENGTH = 6;
@@ -75,7 +75,6 @@ let selectedUploadFiles = [];
 let uploadFileQueue = [];
 let awaitingAdminPassword = false;
 
-const MANIFEST_CONTENT_TYPE = 'application/x-private-send-manifest+json';
 
 function setStatus(target, message, error = false) {
   if (!target) return;
@@ -215,106 +214,14 @@ function isFresh(createdAt) {
   return Number.isFinite(age) && age <= RETENTION_MS;
 }
 
-function isManifestTransfer(transfer) {
-  const objectPath = String(transfer?.object_path || '');
-  return transfer?.content_type === MANIFEST_CONTENT_TYPE || objectPath.endsWith('manifest.json');
-}
-
-async function uploadChunkedFile(file, queueId) {
-  const prefix = crypto.randomUUID();
-  const safeName = cleanFileName(file.name);
-  const totalChunks = Math.ceil(file.size / CHUNK_UPLOAD_BYTES);
-  const chunkPaths = [];
-
-  for (let index = 0; index < totalChunks; index += 1) {
-    const start = index * CHUNK_UPLOAD_BYTES;
-    const end = Math.min(file.size, start + CHUNK_UPLOAD_BYTES);
-    const chunkBlob = file.slice(start, end);
-    const chunkPath = `${prefix}/chunks/${String(index + 1).padStart(4, '0')}.part`;
-    const { error } = await supabase.storage.from(BUCKET).upload(chunkPath, chunkBlob, { upsert: false });
-    if (error) throw error;
-    chunkPaths.push(chunkPath);
-    const progress = 20 + Math.round(((index + 1) / totalChunks) * 65);
-    updateQueueItem(queueId, { progress: Math.min(progress, 95) });
-  }
-
-  const manifest = {
-    kind: 'chunked-transfer',
-    originalName: safeName,
-    originalType: file.type || 'application/octet-stream',
-    totalSize: file.size,
-    chunkSize: CHUNK_UPLOAD_BYTES,
-    totalChunks,
-    chunks: chunkPaths
-  };
-
-  const manifestPath = `${prefix}/manifest.json`;
-  const manifestBlob = new Blob([JSON.stringify(manifest)], { type: MANIFEST_CONTENT_TYPE });
-  const { error: manifestError } = await supabase.storage.from(BUCKET).upload(manifestPath, manifestBlob, { upsert: false });
-  if (manifestError) {
-    await supabase.storage.from(BUCKET).remove(chunkPaths).catch(() => {});
-    throw manifestError;
-  }
-
-  return {
-    objectPath: manifestPath,
-    originalName: safeName,
-    contentType: MANIFEST_CONTENT_TYPE,
-    cleanupPaths: [...chunkPaths, manifestPath]
-  };
-}
-
 async function resolveTransferFile(transfer, storageClient = supabasePublic) {
-  if (!isManifestTransfer(transfer)) {
-    const { data, error } = await storageClient.storage.from(BUCKET).download(transfer.object_path);
-    if (error) throw error;
-    return {
-      blob: data,
-      filename: transfer.original_name || 'download.bin',
-      contentType: transfer.content_type
-    };
-  }
-
-  const { data: manifestBlob, error: manifestError } = await storageClient.storage.from(BUCKET).download(transfer.object_path);
-  if (manifestError) throw manifestError;
-
-  const manifest = JSON.parse(await manifestBlob.text());
-  if (!Array.isArray(manifest.chunks) || !manifest.chunks.length) {
-    throw new Error('Manifest invalid: no chunks found.');
-  }
-
-  const chunkBlobs = [];
-  for (const chunkPath of manifest.chunks) {
-    const { data: chunkData, error: chunkError } = await storageClient.storage.from(BUCKET).download(chunkPath);
-    if (chunkError) throw chunkError;
-    chunkBlobs.push(chunkData);
-  }
-
+  const { data, error } = await storageClient.storage.from(BUCKET).download(transfer.object_path);
+  if (error) throw error;
   return {
-    blob: new Blob(chunkBlobs, { type: manifest.originalType || 'application/octet-stream' }),
-    filename: manifest.originalName || transfer.original_name || 'download.bin',
-    contentType: manifest.originalType || 'application/octet-stream'
+    blob: data,
+    filename: transfer.original_name || 'download.bin',
+    contentType: transfer.content_type
   };
-}
-
-async function deleteTransferAssets(transfer, storageClient = supabase) {
-  const paths = [transfer.object_path];
-  if (isManifestTransfer(transfer)) {
-    try {
-      const { data: manifestBlob, error } = await storageClient.storage.from(BUCKET).download(transfer.object_path);
-      if (!error) {
-        const manifest = JSON.parse(await manifestBlob.text());
-        if (Array.isArray(manifest.chunks)) {
-          for (const pathItem of manifest.chunks) paths.push(pathItem);
-        }
-      }
-    } catch {
-      // best effort cleanup only
-    }
-  }
-
-  const uniquePaths = [...new Set(paths)];
-  await storageClient.storage.from(BUCKET).remove(uniquePaths);
 }
 
 function triggerDownload(blobLike, filename, contentType) {
@@ -354,6 +261,36 @@ function refreshUploadAuthUI() {
 
 async function createUniqueCode() {
   return randomCode();
+}
+
+function makeSplitPartName(fileName, partIndex) {
+  const safe = cleanFileName(fileName);
+  return `${safe}.${String(partIndex).padStart(3, '0')}`;
+}
+
+async function createTransferRowForObject(objectPath, originalName, contentType) {
+  let code = '';
+  let insertError = null;
+
+  for (let i = 0; i < 30; i += 1) {
+    code = await createUniqueCode();
+    const { error } = await supabase.rpc('create_transfer', {
+      p_code: code,
+      p_object_path: objectPath,
+      p_original_name: originalName,
+      p_content_type: contentType,
+      p_created_at: new Date().toISOString()
+    });
+
+    if (!error) return code;
+
+    insertError = error;
+    const msg = String(error.message || '').toLowerCase();
+    const isDuplicate = msg.includes('duplicate key') || msg.includes('already exists');
+    if (!isDuplicate) break;
+  }
+
+  throw insertError || new Error('Could not create transfer');
 }
 
 async function loginForUploadOrAdmin() {
@@ -446,60 +383,42 @@ async function logoutUpload() {
 async function uploadSingleFile(queueItem) {
   const { file } = queueItem;
   updateQueueItem(queueItem.id, { status: 'uploading', progress: 15, error: '' });
-  let uploadTarget = {
-    objectPath: `${crypto.randomUUID()}-${cleanFileName(file.name)}`,
-    originalName: cleanFileName(file.name),
-    contentType: file.type || 'application/octet-stream',
-    cleanupPaths: []
-  };
-
-  if (file.size > MAX_UPLOAD_BYTES) {
-    if (!adminUser) {
-      throw new Error('Over 50MB is admin-only.');
-    }
-    uploadTarget = await uploadChunkedFile(file, queueItem.id);
-  } else {
-    const { error: uploadError } = await supabase.storage
-      .from(BUCKET)
-      .upload(uploadTarget.objectPath, file, { upsert: false });
-
-    if (uploadError) throw uploadError;
-    uploadTarget.cleanupPaths = [uploadTarget.objectPath];
-    updateQueueItem(queueItem.id, { progress: 60 });
+  const isSplitUpload = file.size > MAX_UPLOAD_BYTES;
+  if (isSplitUpload && !adminUser) {
+    throw new Error('Over 50MB is admin-only.');
   }
 
-  let code = '';
-  let insertError = null;
+  const uploadResults = [];
+  const uploadedPaths = [];
+  const totalParts = isSplitUpload ? Math.ceil(file.size / SPLIT_PART_BYTES) : 1;
 
-  for (let i = 0; i < 30; i += 1) {
-    code = await createUniqueCode();
+  try {
+    for (let index = 0; index < totalParts; index += 1) {
+      const start = index * SPLIT_PART_BYTES;
+      const end = Math.min(file.size, start + SPLIT_PART_BYTES);
+      const partBlob = file.slice(start, end);
+      const partName = totalParts === 1 ? cleanFileName(file.name) : makeSplitPartName(file.name, index + 1);
+      const objectPath = `${crypto.randomUUID()}-${partName}`;
 
-    const { error } = await supabase.rpc('create_transfer', {
-      p_code: code,
-      p_object_path: uploadTarget.objectPath,
-      p_original_name: uploadTarget.originalName,
-      p_content_type: uploadTarget.contentType,
-      p_created_at: new Date().toISOString()
-    });
+      const { error: uploadError } = await supabase.storage.from(BUCKET).upload(objectPath, partBlob, { upsert: false });
+      if (uploadError) throw uploadError;
+      uploadedPaths.push(objectPath);
 
-    if (!error) {
-      insertError = null;
-      break;
+      const partCode = await createTransferRowForObject(objectPath, partName, file.type || 'application/octet-stream');
+      uploadResults.push({ name: partName, code: partCode });
+
+      const progress = 20 + Math.round(((index + 1) / totalParts) * 80);
+      updateQueueItem(queueItem.id, { progress: Math.min(progress, 100) });
     }
-
-    insertError = error;
-    const msg = String(error.message || '').toLowerCase();
-    const isDuplicate = msg.includes('duplicate key') || msg.includes('already exists');
-    if (!isDuplicate) break;
-  }
-
-  if (insertError) {
-    await supabase.storage.from(BUCKET).remove(uploadTarget.cleanupPaths);
-    throw insertError;
+  } catch (error) {
+    if (uploadedPaths.length) {
+      await supabase.storage.from(BUCKET).remove(uploadedPaths).catch(() => {});
+    }
+    throw error;
   }
 
   updateQueueItem(queueItem.id, { progress: 100 });
-  return code;
+  return uploadResults;
 }
 
 async function uploadFile() {
@@ -541,9 +460,10 @@ async function uploadFile() {
 
     for (const item of queuedItems) {
       try {
-        const code = await uploadSingleFile(item);
-        updateQueueItem(item.id, { status: 'uploaded', code, progress: 100, error: '' });
-        uploaded.push({ name: cleanFileName(item.file.name), code });
+        const results = await uploadSingleFile(item);
+        const firstCode = results[0]?.code || '';
+        updateQueueItem(item.id, { status: 'uploaded', code: firstCode, progress: 100, error: '' });
+        uploaded.push(...results);
       } catch (error) {
         const msg = error.message || 'failed';
         updateQueueItem(item.id, { status: 'failed', error: msg, progress: 0 });
@@ -701,7 +621,7 @@ async function loadAdminLogs() {
 
     const expiredRows = rows.filter((row) => !isFresh(row.created_at));
     for (const row of expiredRows) {
-      await deleteTransferAssets(row, supabase).catch(() => {});
+      await supabase.storage.from(BUCKET).remove([row.object_path]).catch(() => {});
       await supabase.from('transfers').delete().eq('object_path', row.object_path);
     }
 

@@ -239,7 +239,7 @@ Optional (recommended) global config object before loading `app.js`:
 
 ## Notes
 - Upload max size is 50 MB for normal upload accounts.
-- Admin account can upload files over 50 MB using automatic chunk split upload (chunks are reassembled on download).
+- Admin account can upload files over 50 MB by auto-splitting into 50MB parts (`filename.ext.001`, `.002`, ...), each part with its own code.
 - Server-side upload limit is aligned to 50 MB as well.
 - You can upload multiple files in one batch.
 - Selected files appear in a queue under upload area; click `×` to remove/cancel before upload.
